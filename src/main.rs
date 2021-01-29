@@ -18,7 +18,7 @@ impl Handler for NeovimHandler {
         &self,
         name: String,
         args: Vec<Value>,
-        _neovim: Neovim<Self::Writer>,
+        neovim: Neovim<Self::Writer>,
     ) -> Result<Value, Value> {
         info!("Request: {}, {:?}", name, args);
 
@@ -26,6 +26,19 @@ impl Handler for NeovimHandler {
             "first" => {
                 info!("Succesfully handled first");
                 Ok(Value::from("FIRST"))
+            }
+            "complete" => {
+                let buf = neovim
+                    .get_current_buf()
+                    .await
+                    .expect("Always has one buffer");
+
+                let lines = buf
+                    .get_lines(0, -1, false)
+                    .await
+                    .expect("Always gets da line");
+
+                Ok(Value::from(lines[0].as_str()))
             }
             "_test" => Ok(Value::from(true)),
             _ => Err(nvim_rs::Value::from("Not implemented")),
