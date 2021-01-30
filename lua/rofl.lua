@@ -3,7 +3,9 @@ local rofl = {}
 
 local binary_path = vim.fn.fnamemodify(api.nvim_get_runtime_file("lua/rofl.lua", false)[1], ":h:h") .. "/target/debug/rofl_nvim"
 
-rofl.start = function()
+rofl.start = function(bufnr)
+  bufnr = bufnr or 0
+
   if rofl.job_id then
     return
   end
@@ -14,6 +16,36 @@ rofl.start = function()
       rpc = true
     }
   )
+
+  -- local function on_lines(bufnr, firstline, new_lastline)
+  --   if api.nvim_get_mode()["mode"]:find("i") == nil then
+  --     return
+  --   end
+
+  --   firstline = api.nvim_buf_get_lines(bufnr, firstline, new_lastline, false)
+
+  --   rofl.notify("on_lines", firstline)
+  -- end
+
+  -- api.nvim_buf_attach(bufnr, false, {
+  --   on_lines = function(_, bufnr, firstline, lastline, new_lastline)
+  --     local status, err = pcall(on_lines, bufnr, firstline, new_lastline)
+  --     if err then
+  --       error(err)
+  --       return true
+  --     end
+  --   end
+  -- })
+end
+
+rofl.attach = function(bufnr)
+  bufnr = bufnr or 0
+  api.nvim_buf_attach(bufnr, true, {
+    on_lines = function()
+      print("notifying")
+      rofl.notify("complete")
+    end
+  })
 end
 
 rofl.request = function(method, ...)
