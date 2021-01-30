@@ -3,9 +3,9 @@ mod entry;
 mod score;
 mod source;
 
-use std::{cell::RefCell, fs::File, sync::Arc};
+use std::{cell::RefCell, fs::File, panic, sync::Arc, time::Duration};
 
-use log::{info, LevelFilter};
+use log::{error, info, trace, LevelFilter};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -18,18 +18,19 @@ use nvim_rs::{
 use simplelog::WriteLogger;
 use tokio::{
     io::Stdout,
-    sync::{Mutex, RwLock},
-    task,
+    sync::{Mutex, RwLock, RwLockReadGuard},
+    time::Instant,
 };
 
 pub use entry::Entry;
 pub use score::Score;
 pub use source::{SharedSource, Source};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct Completor {
     v_char: Option<char>,
     sources: Vec<SharedSource>,
+    instant: Instant,
 }
 
 impl Completor {
@@ -37,42 +38,71 @@ impl Completor {
         Completor {
             v_char: None,
             sources: Vec::new(),
+            instant: Instant::now(),
         }
     }
 
-    async fn complete(&mut self, nvim: Nvim) -> Result<()> {
-        let nvim_h = nvim.read().await;
+    fn quicker_than(&mut self, duration: Duration) -> bool {
+        let earlier = self.instant;
+        let now = Instant::now();
+        self.instant = now;
+        now.duration_since(earlier) < duration
+    }
+
+    async fn complete(&mut self, shared_nvim: SharedNvim) -> Result<()> {
+        // if self.quicker_than(Duration::from_millis(50)) {
+        //     return Ok(());
+        // }
+
+        let nvim = shared_nvim.read().await;
+
         let mut futs = Vec::with_capacity(self.sources.len());
         for source in &self.sources {
-            let nvim = nvim.clone();
+            let shared_nvim = shared_nvim.clone();
             let source = source.clone();
-            let handle = tokio::spawn(async move { source.lock().await.get(nvim).await });
+            let handle = tokio::spawn(async move { source.lock().await.get(shared_nvim).await });
             futs.push(handle);
         }
+
         let entries: Vec<Entry> = join_all(futs)
             .await
             .into_iter()
-            .map(|res| res.unwrap())
+            .map(|res| res.expect("Failed to join_all"))
             .flatten()
             .collect();
+
         info!("Completing with these entries: {:?}", entries);
         let entries = Entry::serialize(entries);
-        nvim_h.call("complete", call_args!(1, entries)).await?;
-        nvim_h.command("echo 'hello'").await?;
+        nvim.call_function(
+            "complete",
+            call_args!(nvim.call_function("col", call_args!(".")).await?, entries),
+        )
+        .await?;
         Ok(())
     }
 
-    fn register_source<S: Source>(&mut self, source: S) {
+    fn register<S: Source>(&mut self, source: S) {
         self.sources.push(Arc::new(Mutex::new(Box::new(source))))
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 struct NeovimHandler {
-    completor: Arc<Mutex<Completor>>, // we want it to block
+    completor: Arc<Mutex<Completor>>,
 }
 
-type Nvim = Arc<RwLock<Neovim<Compat<Stdout>>>>;
+#[derive(Clone)]
+pub struct SharedNvim(Arc<RwLock<Neovim<Compat<Stdout>>>>);
+
+impl SharedNvim {
+    fn new(neovim: Neovim<Compat<Stdout>>) -> SharedNvim {
+        SharedNvim(Arc::new(RwLock::new(neovim)))
+    }
+
+    async fn read(&self) -> RwLockReadGuard<'_, Neovim<Compat<Stdout>>> {
+        self.0.read().await
+    }
+}
 
 #[async_trait]
 impl Handler for NeovimHandler {
@@ -98,12 +128,17 @@ impl Handler for NeovimHandler {
     }
 
     async fn handle_notify(&self, name: String, args: Vec<Value>, neovim: Neovim<Self::Writer>) {
-        info!("Notification: {}, {:?}", name, args);
-        let nvim = Arc::new(RwLock::new(neovim));
+        let nvim = SharedNvim::new(neovim);
+        trace!("Notification: {}, {:?}", name, args);
 
         match name.as_ref() {
             "complete" => {
-                self.completor.lock().await.complete(nvim).await;
+                self.completor
+                    .lock()
+                    .await
+                    .complete(nvim)
+                    .await
+                    .expect("Failed to complete");
             }
             _ => (),
         }
@@ -119,12 +154,21 @@ async fn main() {
     )
     .expect("Failed to start logger");
 
-    info!("Starting running the things");
+    // we do not want to crash when panicking, instead log it
+    panic::set_hook(Box::new(move |panic| {
+        error!("----- Panic -----");
+        error!("{}", panic);
+    }));
+
     let mut completor = Completor::new();
-    completor.register_source(source::Counter(0));
+    completor.register(source::Counter(0));
+    completor.register(source::Static::new(&[
+        "This is just a test".to_owned(),
+        "This is another test from static source".to_owned(),
+    ]));
+
     let (nvim, io_handler) = create::new_parent(NeovimHandler {
         completor: Arc::new(Mutex::new(completor)),
-        // ..Default::default()
     })
     .await;
     info!("Connected to parent...");

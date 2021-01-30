@@ -16,36 +16,38 @@ rofl.start = function(bufnr)
       rpc = true
     }
   )
-
-  -- local function on_lines(bufnr, firstline, new_lastline)
-  --   if api.nvim_get_mode()["mode"]:find("i") == nil then
-  --     return
-  --   end
-
-  --   firstline = api.nvim_buf_get_lines(bufnr, firstline, new_lastline, false)
-
-  --   rofl.notify("on_lines", firstline)
-  -- end
-
-  -- api.nvim_buf_attach(bufnr, false, {
-  --   on_lines = function(_, bufnr, firstline, lastline, new_lastline)
-  --     local status, err = pcall(on_lines, bufnr, firstline, new_lastline)
-  --     if err then
-  --       error(err)
-  --       return true
-  --     end
-  --   end
-  -- })
 end
 
-rofl.attach = function(bufnr)
-  bufnr = bufnr or 0
-  api.nvim_buf_attach(bufnr, true, {
-    on_lines = function()
-      print("notifying")
-      rofl.notify("complete")
+local function throttle_leading(fn, ms)
+  local timer = vim.loop.new_timer()
+  local running = false
+
+  local function wrapped_fn()
+    if not running then
+      timer:start(ms, 0, function()
+        running = false
+      end)
+      running = true
+      pcall(vim.schedule_wrap(fn))
     end
-  })
+  end
+  return wrapped_fn, timer
+end
+
+do
+  local throttled, timer = throttle_leading(function() rofl.notify("compelte") end, 10)
+  rofl.attach = function(bufnr)
+    bufnr = bufnr or 0
+    api.nvim_buf_attach(bufnr, true, {
+      on_lines = function()
+        rofl.notify("complete")
+      end,
+      -- on_lines = throttled,
+      on_detach = function()
+        timer:close()
+      end
+    })
+  end
 end
 
 rofl.request = function(method, ...)
