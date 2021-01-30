@@ -5,7 +5,7 @@ mod source;
 
 use std::{cell::RefCell, fs::File, panic, sync::Arc, time::Duration};
 
-use log::{error, info, trace, LevelFilter};
+use log::{debug, error, info, LevelFilter};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -26,11 +26,12 @@ pub use entry::Entry;
 pub use score::Score;
 pub use source::{SharedSource, Source};
 
-const CHANNEL_SIZE: usize = 100;
+const CHANNEL_SIZE: usize = 500;
 
 #[derive(Debug, Clone)]
 struct Completor {
     v_char: Option<char>,
+    user_match: Arc<RwLock<String>>,
     sources: Vec<SharedSource>,
     instant: Instant,
 }
@@ -39,6 +40,7 @@ impl Completor {
     fn new() -> Completor {
         Completor {
             v_char: None,
+            user_match: Arc::new(RwLock::new(String::new())),
             sources: Vec::new(),
             instant: Instant::now(),
         }
@@ -56,9 +58,19 @@ impl Completor {
             panic!("String is not only one char");
         }
 
-        trace!("Setting v_char to {}", maybe_c);
+        debug!("Setting v_char to {}", maybe_c);
 
         self.v_char = Some(maybe_c);
+    }
+
+    async fn update_user_match(&mut self) {
+        let mut user_match = self.user_match.write().await;
+        if let Some(' ') = self.v_char {
+            user_match.clear();
+        } else if let Some(c) = self.v_char {
+            user_match.push(c)
+        }
+        debug!("the user match is now: {}", user_match);
     }
 
     fn quicker_than(&mut self, duration: Duration) -> bool {
@@ -80,18 +92,26 @@ impl Completor {
 
         // let mode = nvim.get_mode().await?.swap_remove(0).1;
         // let mode = mode.as_str().unwrap();
-        // trace!("mode: {:?}", mode);
+        // debug!("mode: {:?}", mode);
         // if mode != "i" || mode != "ic" {
         //     return Ok(());
         // }
 
         let mut futs = Vec::with_capacity(self.sources.len());
+
+        let user_match = self.user_match.read().await;
         for source in &self.sources {
             let shared_nvim = shared_nvim.clone();
             let source = source.clone();
             let sender = sender.clone();
-            let handle =
-                tokio::spawn(async move { source.lock().await.get(shared_nvim, sender).await });
+            let user_match = user_match.clone();
+            let handle = tokio::spawn(async move {
+                source
+                    .lock()
+                    .await
+                    .get(shared_nvim, sender, &*user_match.clone())
+                    .await
+            });
             futs.push(handle);
         }
         drop(sender); // all the sources have their senders, we don't need it anymore
@@ -107,6 +127,7 @@ impl Completor {
             info!("Got entry: {:?}", entry);
             entries.push(entry);
         }
+        entries.sort_unstable_by(|e1, e2| e1.score.cmp(&e2.score));
 
         info!("Completing with these entries: {:?}", entries);
         let entries = Entry::serialize(entries);
@@ -163,7 +184,7 @@ impl Handler for NeovimHandler {
         neovim: Neovim<Self::Writer>,
     ) {
         let nvim = SharedNvim::new(neovim);
-        trace!("Notification: {}, {:?}", name, args);
+        debug!("Notification: {}, {:?}", name, args);
 
         match name.as_ref() {
             "complete" => {
@@ -174,7 +195,17 @@ impl Handler for NeovimHandler {
                     .await
                     .expect("Failed to complete");
             }
-            "v_char" => self.completor.lock().await.set_v_char(args.remove(0)),
+            "v_char" => {
+                let mut completor = self.completor.lock().await;
+                completor.set_v_char(args.remove(0));
+                drop(args);
+                completor.update_user_match();
+            }
+            "insert_leave" => {
+                let completor = self.completor.lock().await;
+                info!("Clearing user match");
+                completor.user_match.write().await.clear();
+            }
             _ => (),
         }
     }
@@ -183,7 +214,7 @@ impl Handler for NeovimHandler {
 #[tokio::main]
 async fn main() {
     WriteLogger::init(
-        LevelFilter::Trace,
+        LevelFilter::Debug,
         simplelog::Config::default(),
         File::create("/home/brian/rofl.log").expect("Failed to create file"),
     )

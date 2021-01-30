@@ -19,7 +19,7 @@ pub use r#static::Static;
 
 #[async_trait]
 pub trait Source: 'static + Sync + Send + DynClone + fmt::Debug {
-    async fn get(&mut self, nvim: SharedNvim, sender: Sender<Entry>);
+    async fn get(&mut self, nvim: SharedNvim, sender: Sender<Entry>, user_match: &str);
 }
 
 dyn_clone::clone_trait_object!(Source);

@@ -1,10 +1,11 @@
 use super::Score;
+use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 use nvim_rs::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
-    contents: String,
-    score: Score,
+    pub contents: String,
+    pub score: Score,
 }
 
 impl Entry {
@@ -14,6 +15,19 @@ impl Entry {
 
     pub fn serialize(entries: Vec<Entry>) -> Value {
         Value::Array(entries.into_iter().map(|e| e.into()).collect())
+    }
+
+    pub fn score(self, text: &str) -> Option<Entry> {
+        let matcher = SkimMatcherV2::default();
+        matcher
+            .fuzzy_match(&self.contents, text)
+            .map(|score| Entry::new(self.contents, Score::new(score)))
+    }
+
+    pub fn score_multiple(entries: Vec<Entry>, text: &str) -> Vec<Entry> {
+        let mut scored: Vec<_> = entries.into_iter().filter_map(|e| e.score(text)).collect();
+        scored.sort_unstable_by(|e1, e2| e1.score.cmp(&e2.score));
+        scored
     }
 }
 
