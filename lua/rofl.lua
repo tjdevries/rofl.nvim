@@ -1,4 +1,7 @@
+local api = vim.api
 local rofl = {}
+
+local binary_path = vim.fn.fnamemodify(api.nvim_get_runtime_file("lua/rofl.lua", false)[1], ":h:h") .. "/target/debug/rofl_nvim"
 
 rofl.start = function()
   if rofl.job_id then
@@ -6,8 +9,10 @@ rofl.start = function()
   end
 
   rofl.job_id = vim.fn.jobstart(
-    { "target/debug/rofl_nvim" },
-    { rpc = true }
+    {binary_path},
+    {
+      rpc = true
+    }
   )
 end
 

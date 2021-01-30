@@ -1,10 +1,13 @@
 // Erik recommends: https://tracing.rs/tracing/
 
+use std::fs::File;
+
 use async_std::{self, io::Stdout};
 use log::{info, LevelFilter};
 
 use async_trait::async_trait;
 use nvim_rs::{create::async_std as create, Handler, Neovim, Value};
+use simplelog::WriteLogger;
 
 #[derive(Clone)]
 // struct NeovimHandler(Arc<Mutex<Posis>>);
@@ -59,7 +62,12 @@ impl Handler for NeovimHandler {
 
 #[async_std::main]
 async fn main() {
-    simple_logging::log_to_file("test.log", LevelFilter::Info).expect("Could not use log file");
+    WriteLogger::init(
+        LevelFilter::Info,
+        simplelog::Config::default(),
+        File::create("/home/brian/rofl.log").expect("Failed to create file"),
+    )
+    .expect("Failed to start logger");
 
     info!("Starting running the things");
     let handler: NeovimHandler = NeovimHandler {};
