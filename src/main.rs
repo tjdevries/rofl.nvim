@@ -18,13 +18,15 @@ use nvim_rs::{
 use simplelog::WriteLogger;
 use tokio::{
     io::Stdout,
-    sync::{Mutex, RwLock, RwLockReadGuard},
+    sync::{mpsc::channel, Mutex, RwLock, RwLockReadGuard},
     time::Instant,
 };
 
 pub use entry::Entry;
 pub use score::Score;
 pub use source::{SharedSource, Source};
+
+const CHANNEL_SIZE: usize = 100;
 
 #[derive(Debug, Clone)]
 struct Completor {
@@ -42,6 +44,23 @@ impl Completor {
         }
     }
 
+    fn set_v_char(&mut self, c: Value) {
+        let s: String = match c {
+            Value::String(utf_s) => utf_s.into_str().expect("Couldn't convert to rust String"),
+            _ => panic!("The value must be a string"),
+        };
+        let mut chars = s.chars();
+        let maybe_c = chars.next().expect("String is empty");
+
+        if let Some(c) = chars.next() {
+            panic!("String is not only one char");
+        }
+
+        trace!("Setting v_char to {}", maybe_c);
+
+        self.v_char = Some(maybe_c);
+    }
+
     fn quicker_than(&mut self, duration: Duration) -> bool {
         let earlier = self.instant;
         let now = Instant::now();
@@ -54,22 +73,40 @@ impl Completor {
         //     return Ok(());
         // }
 
+        info!("completing");
         let nvim = shared_nvim.read().await;
+
+        let (sender, mut receiver) = channel(CHANNEL_SIZE);
+
+        // let mode = nvim.get_mode().await?.swap_remove(0).1;
+        // let mode = mode.as_str().unwrap();
+        // trace!("mode: {:?}", mode);
+        // if mode != "i" || mode != "ic" {
+        //     return Ok(());
+        // }
 
         let mut futs = Vec::with_capacity(self.sources.len());
         for source in &self.sources {
             let shared_nvim = shared_nvim.clone();
             let source = source.clone();
-            let handle = tokio::spawn(async move { source.lock().await.get(shared_nvim).await });
+            let sender = sender.clone();
+            let handle =
+                tokio::spawn(async move { source.lock().await.get(shared_nvim, sender).await });
             futs.push(handle);
         }
+        drop(sender); // all the sources have their senders, we don't need it anymore
 
-        let entries: Vec<Entry> = join_all(futs)
+        join_all(futs)
             .await
             .into_iter()
-            .map(|res| res.expect("Failed to join_all"))
-            .flatten()
-            .collect();
+            .map(|j| j.unwrap())
+            .for_each(|_| ());
+
+        let mut entries = Vec::new();
+        while let Some(entry) = receiver.recv().await {
+            info!("Got entry: {:?}", entry);
+            entries.push(entry);
+        }
 
         info!("Completing with these entries: {:?}", entries);
         let entries = Entry::serialize(entries);
@@ -116,18 +153,15 @@ impl Handler for NeovimHandler {
     ) -> Result<Value, Value> {
         info!("Request: {}, {:?}", name, args);
 
-        match name.as_ref() {
-            "first" => {
-                info!("Succesfully handled first");
-                Ok(Value::from("FIRST"))
-            }
-            "insert_char_pre" => Ok("".into_val()),
-            "_test" => Ok(Value::from(true)),
-            _ => Err(nvim_rs::Value::from("Not implemented")),
-        }
+        Ok(Value::from(true))
     }
 
-    async fn handle_notify(&self, name: String, args: Vec<Value>, neovim: Neovim<Self::Writer>) {
+    async fn handle_notify(
+        &self,
+        name: String,
+        mut args: Vec<Value>,
+        neovim: Neovim<Self::Writer>,
+    ) {
         let nvim = SharedNvim::new(neovim);
         trace!("Notification: {}, {:?}", name, args);
 
@@ -140,6 +174,7 @@ impl Handler for NeovimHandler {
                     .await
                     .expect("Failed to complete");
             }
+            "v_char" => self.completor.lock().await.set_v_char(args.remove(0)),
             _ => (),
         }
     }
@@ -148,7 +183,7 @@ impl Handler for NeovimHandler {
 #[tokio::main]
 async fn main() {
     WriteLogger::init(
-        LevelFilter::Info,
+        LevelFilter::Trace,
         simplelog::Config::default(),
         File::create("/home/brian/rofl.log").expect("Failed to create file"),
     )

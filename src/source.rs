@@ -1,22 +1,25 @@
 mod buffer;
-mod r#static;
 mod counter;
+mod r#static;
 
 use std::{fmt, sync::Arc};
 
 use async_trait::async_trait;
 use dyn_clone::DynClone;
 use nvim_rs::{compat::tokio::Compat, Neovim};
-use tokio::{io::Stdout, sync::{Mutex, RwLock}};
+use tokio::{
+    io::Stdout,
+    sync::{mpsc::Sender, Mutex, RwLock},
+};
 
-use super::{Entry, SharedNvim, Score};
+use super::{Entry, Score, SharedNvim};
 
 pub use counter::Counter;
 pub use r#static::Static;
 
 #[async_trait]
 pub trait Source: 'static + Sync + Send + DynClone + fmt::Debug {
-    async fn get(&mut self, nvim: SharedNvim) -> Vec<Entry>;
+    async fn get(&mut self, nvim: SharedNvim, sender: Sender<Entry>);
 }
 
 dyn_clone::clone_trait_object!(Source);

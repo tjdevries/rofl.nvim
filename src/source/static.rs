@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use tokio::sync::mpsc::Sender;
 
 use super::{Score, SharedNvim, Source};
 use crate::Entry;
@@ -19,7 +20,9 @@ impl Static {
 
 #[async_trait]
 impl Source for Static {
-    async fn get(&mut self, nvim: SharedNvim) -> Vec<Entry> {
-        self.0.clone()
+    async fn get(&mut self, _nvim: SharedNvim, mut sender: Sender<Entry>) {
+        for entry in &self.0 {
+            sender.send(entry.clone()).await.unwrap();
+        }
     }
 }
