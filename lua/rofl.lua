@@ -43,15 +43,27 @@ rofl.notify = function(method, ...)
   vim.rpcnotify(rofl.job_id, method, ...)
 end
 
-rofl.test = function()
-  rofl.start()
+local sources = {
+  current = 1,
+  fns = {},
+}
 
-  print("Sending a request...")
-  print("Result:", rofl.request("first", 1))
-  print("Done!")
+rofl.add_source = function(fn)
+  table.insert(sources.fns, fn)
+end
 
-  print("NOTIFY")
-  rofl.notify("PogChamp")
+-- use this to be able to run sources in tokio tasks
+rofl.step_source = function()
+  local res = sources.fns[sources.current]()
+  sources.current = sources.current + 1
+  if sources.current > #sources.fns then
+    sources.current = 1
+  end
+  return res
+end
+
+rofl.step_amount = function()
+  return #sources.fns
 end
 
 return rofl
