@@ -109,7 +109,7 @@ impl Completor {
                 source
                     .lock()
                     .await
-                    .get(shared_nvim, sender, &*user_match.clone())
+                    .get(shared_nvim, sender, &user_match.clone())
                     .await
             });
             futs.push(handle);
@@ -199,7 +199,7 @@ impl Handler for NeovimHandler {
                 let mut completor = self.completor.lock().await;
                 completor.set_v_char(args.remove(0));
                 drop(args);
-                completor.update_user_match();
+                completor.update_user_match().await;
             }
             "insert_leave" => {
                 let completor = self.completor.lock().await;
@@ -213,12 +213,12 @@ impl Handler for NeovimHandler {
 
 #[tokio::main]
 async fn main() {
-    WriteLogger::init(
-        LevelFilter::Debug,
-        simplelog::Config::default(),
-        File::create("/home/brian/rofl.log").expect("Failed to create file"),
-    )
-    .expect("Failed to start logger");
+    // WriteLogger::init(
+    //     LevelFilter::Debug,
+    //     simplelog::Config::default(),
+    //     File::create("/home/brian/rofl.log").expect("Failed to create file"),
+    // )
+    // .expect("Failed to start logger");
 
     // we do not want to crash when panicking, instead log it
     panic::set_hook(Box::new(move |panic| {

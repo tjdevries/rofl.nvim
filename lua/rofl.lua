@@ -1,7 +1,8 @@
 local api = vim.api
 local rofl = {}
 
-local binary_path = vim.fn.fnamemodify(api.nvim_get_runtime_file("lua/rofl.lua", false)[1], ":h:h") .. "/target/debug/rofl_nvim"
+-- local binary_path = vim.fn.fnamemodify(api.nvim_get_runtime_file("lua/rofl.lua", false)[1], ":h:h") .. "/target/debug/rofl_nvim"
+local binary_path = vim.fn.fnamemodify(api.nvim_get_runtime_file("lua/rofl.lua", false)[1], ":h:h") .. "/target/release/rofl_nvim"
 
 rofl.start = function(bufnr)
   bufnr = bufnr or 0
@@ -49,11 +50,13 @@ local sources = {
 }
 
 rofl.add_source = function(fn)
+  rofl.start()
   table.insert(sources.fns, fn)
 end
 
 -- use this to be able to run sources in tokio tasks
 rofl.step_source = function()
+  rofl.start()
   local res = sources.fns[sources.current]()
   sources.current = sources.current + 1
   if sources.current > #sources.fns then
@@ -63,6 +66,7 @@ rofl.step_source = function()
 end
 
 rofl.step_amount = function()
+  rofl.start()
   return #sources.fns
 end
 
