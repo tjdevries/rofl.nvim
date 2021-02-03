@@ -44,6 +44,10 @@ rofl.notify = function(method, ...)
   vim.rpcnotify(rofl.job_id, method, ...)
 end
 
+rofl.update_words = function()
+  rofl.notify("update_buffer_words")
+end
+
 local sources = {
   current = 1,
   fns = {},

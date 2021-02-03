@@ -15,12 +15,16 @@ use tokio::{
 
 use super::{Entry, Score, SharedNvim};
 
+pub use buffer::BufferWords;
 pub use counter::Counter;
 pub use r#static::Static;
 
 #[async_trait]
 pub trait Source: 'static + Sync + Send + DynClone + fmt::Debug {
     async fn get(&mut self, nvim: SharedNvim, user_match: &str) -> Vec<Entry>;
+    async fn update(&mut self, _nvim: SharedNvim) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 dyn_clone::clone_trait_object!(Source);

@@ -3,7 +3,7 @@ mod nvim;
 mod score;
 mod source;
 
-use std::{panic, sync::Arc, time::Duration};
+use std::{collections::HashMap, panic, sync::Arc, time::Duration};
 
 use log::{debug, error, info, trace, LevelFilter};
 
@@ -28,13 +28,15 @@ pub use entry::Entry;
 pub use score::Score;
 pub use source::{SharedSource, Source};
 
+const PUM_HEIGHT: usize = 5;
+
 type SharedNvim = Arc<Neovim<Compat<Stdout>>>;
 
 #[derive(Debug, Clone)]
 struct Completor {
     v_char: Option<char>,
     user_match: Arc<RwLock<String>>,
-    sources: Vec<SharedSource>,
+    sources: HashMap<String, SharedSource>,
     instant: Instant,
     complete_fut: Option<AbortHandle>,
 }
@@ -44,7 +46,7 @@ impl Completor {
         Completor {
             v_char: None,
             user_match: Arc::new(RwLock::new(String::new())),
-            sources: Vec::new(),
+            sources: HashMap::new(),
             instant: Instant::now(),
             complete_fut: None,
         }
@@ -84,7 +86,7 @@ impl Completor {
         now.duration_since(earlier) < duration
     }
 
-    async fn complete(&mut self, nvim: SharedNvim) -> Result<()> {
+    async fn complete(&self, nvim: SharedNvim) -> Result<()> {
         // if self.quicker_than(Duration::from_millis(50)) {
         //     return Ok(());
         // }
@@ -98,7 +100,7 @@ impl Completor {
 
         let mut futs = Vec::with_capacity(self.sources.len());
 
-        for source in &self.sources {
+        for source in self.sources.values() {
             let nvim = nvim.clone();
             let source = source.clone();
             let user_match = self.user_match.clone();
@@ -121,6 +123,12 @@ impl Completor {
 
         entries.sort_unstable_by(|e1, e2| e1.score.cmp(&e2.score));
 
+        let get = entries
+            .len()
+            .saturating_sub(PUM_HEIGHT);
+
+        drop(entries.drain(0..get));
+
         let entries = Entry::serialize(entries).await;
 
         nvim.call_function(
@@ -131,14 +139,15 @@ impl Completor {
         Ok(())
     }
 
-    fn register<S: Source>(&mut self, source: S) {
-        self.sources.push(Arc::new(Mutex::new(Box::new(source))))
+    fn register<S: Source>(&mut self, name: &str, source: S) {
+        self.sources
+            .insert(name.to_string(), Arc::new(Mutex::new(Box::new(source))));
     }
 }
 
 #[derive(Debug, Clone)]
 struct NeovimHandler {
-    completor: Arc<Mutex<Completor>>,
+    completor: Arc<RwLock<Completor>>,
 }
 
 #[async_trait]
@@ -162,39 +171,44 @@ impl Handler for NeovimHandler {
         mut args: Vec<Value>,
         neovim: Neovim<Self::Writer>,
     ) {
-        let nvim = SharedNvim::new(neovim);
         trace!("Notification: {}, {:?}", name, args);
+
+        let nvim = SharedNvim::new(neovim);
+        let completor = self.completor();
 
         match name.as_ref() {
             "complete" => {
-                if let Some(previous_complete) = self.completor.lock().await.complete_fut.take() {
+                if let Some(previous_complete) = self.completor.write().await.complete_fut.take() {
                     previous_complete.abort();
                 }
 
-                let completor = self.completor();
                 let fut = task::spawn(async move {
-                    let mut completor = completor.lock().await;
+                    let completor = completor.read().await;
                     completor.complete(nvim).await.expect("Failed to complete");
                 });
 
                 let (_fut, handle) = abortable(fut);
-                self.completor.lock().await.complete_fut.replace(handle);
+                self.completor.write().await.complete_fut.replace(handle);
             }
             "v_char" => {
-                let completor = self.completor();
                 task::spawn(async move {
-                    let mut completor_handle = completor.lock().await;
+                    let mut completor_handle = completor.write().await;
                     completor_handle.set_v_char(args.remove(0));
                     drop(args);
                     completor_handle.update_user_match().await;
                 });
             }
             "insert_leave" => {
-                let completor = self.completor();
                 task::spawn(async move {
-                    let completor = completor.lock().await;
                     info!("Clearing user match");
-                    completor.user_match.write().await.clear();
+                    completor.write().await.user_match.write().await.clear();
+                });
+            }
+            "update_buffer_words" => {
+                task::spawn(async move {
+                    let completor = completor.read().await;
+                    let mut source = completor.sources.get("buffer_words").unwrap().lock().await;
+                    source.update(nvim).await.unwrap();
                 });
             }
             _ => (),
@@ -203,7 +217,7 @@ impl Handler for NeovimHandler {
 }
 
 impl NeovimHandler {
-    fn completor(&self) -> Arc<Mutex<Completor>> {
+    fn completor(&self) -> Arc<RwLock<Completor>> {
         self.completor.clone()
     }
 }
@@ -230,14 +244,18 @@ async fn run() {
     }));
 
     let mut completor = Completor::new();
-    completor.register(source::Counter(0));
-    completor.register(source::Static::new(&[
-        "This is just a test".to_owned(),
-        "This is another test from static source".to_owned(),
-    ]));
+    completor.register("counter", source::Counter(0));
+    completor.register(
+        "static",
+        source::Static::new(&[
+            "This is just a test".to_owned(),
+            "This is another test from static source".to_owned(),
+        ]),
+    );
+    completor.register("buffer_words", source::BufferWords::new());
 
     let (nvim, io_handler) = create::new_parent(NeovimHandler {
-        completor: Arc::new(Mutex::new(completor)),
+        completor: Arc::new(RwLock::new(completor)),
     })
     .await;
     info!("Connected to parent...");
