@@ -1,19 +1,34 @@
 // Erik recommends: https://tracing.rs/tracing/
 use async_trait::async_trait;
 use log::{error, info, LevelFilter};
-use nvim_rs::{
-    call_args, compat::tokio::Compat, create::tokio as create, rpc::model::IntoVal, Handler,
-    Neovim, Value,
-};
+use nvim_rs::{compat::tokio::Compat, create::tokio as create, Handler, Neovim, Value};
 use simplelog::WriteLogger;
 use std::{collections::HashMap, panic, sync::Arc};
 use tokio::{io::Stdout, runtime, sync::RwLock};
 
+mod collections;
 mod nvim;
+
+use nvim::iskeyword;
 
 #[derive(Debug, Clone)]
 struct NeovimHandler {
-    iskeyword_map: Arc<RwLock<HashMap<u64, String>>>,
+    iskeyword_map: Arc<RwLock<HashMap<u64, iskeyword::KeywordMatcher>>>,
+}
+
+async fn buf_initialize(handler: &NeovimHandler, args: Vec<Value>) -> Result<Value, Value> {
+    let mut iskeyword_map = handler.iskeyword_map.write().await;
+
+    let bufnr = args[0].as_u64().expect("Yo dawg, send me those bufnrs");
+    let iskeyword_str = args[1].as_str().expect("iskeyword to be sent as a string");
+
+    // info!("{:?}", nvim::iskeyword::transform(&iskeyword_str));
+
+    info!("old iskeyword {:?}", iskeyword_map);
+    iskeyword_map.insert(bufnr, iskeyword::transform(iskeyword_str));
+    info!("new iskeyword {:?}", iskeyword_map);
+
+    return Ok(Value::from("hello"));
 }
 
 #[async_trait]
@@ -36,13 +51,26 @@ impl Handler for NeovimHandler {
 
                 let iskeyword_map = self.iskeyword_map.read().await;
 
-                let iskeyword = iskeyword_map
-                    .get(&current_bufnr)
-                    .expect("To have already saved this");
+                let iskeyword_option = iskeyword_map.get(&current_bufnr);
+                if iskeyword_option.is_none() {
+                    return Ok(Value::from(-1));
+                }
 
-                info!("find_start: {}, {}", current_cursor, iskeyword);
+                let keyword_matcher = iskeyword_option.expect("Has to be it now");
+                let line_range = keyword_matcher.find(&current_line, current_cursor);
+                let current_slice = &current_line.to_string()[line_range.start..line_range.finish];
 
-                Ok(Value::from(current_line.len()))
+                info!("find_start: {}, {:?}", current_cursor, current_slice);
+
+                // minus 1 because indexing
+                Ok(Value::from(line_range.start - 1))
+            }
+            "complete" => {
+                info!("Completing...");
+                Ok(Value::Array(vec![Value::from("hello")]))
+            }
+            "buf_initialize" => {
+                return buf_initialize(self, args).await;
             }
             _ => Ok(Value::from(3)),
         }
@@ -54,16 +82,7 @@ impl Handler for NeovimHandler {
             "v_char" => {}
             "insert_leave" => {}
             "buf_initialize" => {
-                let mut iskeyword_map = self.iskeyword_map.write().await;
-
-                let bufnr = args[0].as_u64().expect("Yo dawg, send me those bufnrs");
-                let iskeyword = args[1].to_string();
-
-                info!("{:?}", nvim::iskeyword::transform(&iskeyword));
-
-                info!("old iskeyword {:?}", iskeyword_map);
-                iskeyword_map.insert(bufnr, iskeyword);
-                info!("new iskeyword {:?}", iskeyword_map);
+                let _ = buf_initialize(self, args).await;
             }
             _ => (),
         }
@@ -84,7 +103,7 @@ async fn run() {
     std::fs::create_dir_all(&cache_path).expect("Failed to create cache dir");
 
     WriteLogger::init(
-        LevelFilter::Debug,
+        LevelFilter::Trace,
         simplelog::Config::default(),
         std::fs::File::create(cache_path.join("rofl.log")).expect("Failed to create log file"),
     )

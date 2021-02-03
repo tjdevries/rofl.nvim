@@ -26,12 +26,11 @@ rofl.start = function(bufnr)
     }
   )
   print("Making new job...", rofl.job_id)
-
-  rofl.notify(
+  print("Request Result: ", rofl.request(
     "buf_initialize",
     vim.api.nvim_get_current_buf(),
     vim.bo.iskeyword
-  )
+  ))
 end
 
 rofl.attach = function(bufnr)
@@ -51,8 +50,12 @@ end
 
 rofl.request = function(method, ...)
   rofl.start()
-  return vim.rpcrequest(rofl.job_id, method, ...)
+  local result = vim.rpcrequest(rofl.job_id, method, ...)
+  print("Result:", method, result)
+  return result
 end
+
+
 
 rofl.complete_func = function(find_start, base)
   if find_start == 1 then
@@ -69,7 +72,12 @@ rofl.complete_func = function(find_start, base)
       vim.api.nvim_win_get_cursor(0)[2]
     )
   else
-    return { "hello", "world", "what" }
+    return rofl.request(
+      'complete',
+
+      -- And more...
+      base
+    )
   end
 end
 
