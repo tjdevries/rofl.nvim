@@ -1,5 +1,5 @@
-mod nvim;
 mod entry;
+mod nvim;
 mod score;
 mod source;
 
@@ -18,6 +18,7 @@ use nvim_rs::{
 use simplelog::WriteLogger;
 use tokio::{
     io::Stdout,
+    runtime,
     sync::{mpsc::channel, Mutex, RwLock, RwLockReadGuard},
     time::Instant,
 };
@@ -196,8 +197,7 @@ impl Handler for NeovimHandler {
     }
 }
 
-#[tokio::main]
-async fn main() {
+async fn run() {
     WriteLogger::init(
         LevelFilter::Debug,
         simplelog::Config::default(),
@@ -220,7 +220,6 @@ async fn main() {
 
     let (nvim, io_handler) = create::new_parent(NeovimHandler {
         completor: Arc::new(Mutex::new(completor)),
-        completor: Arc::new(Mut)
     })
     .await;
     info!("Connected to parent...");
@@ -242,4 +241,12 @@ async fn main() {
                 });
         }
     }
+}
+
+fn main() {
+    let mut runtime = runtime::Builder::new()
+        .threaded_scheduler()
+        .build()
+        .expect("Failed to build runtime");
+    runtime.block_on(run())
 }
