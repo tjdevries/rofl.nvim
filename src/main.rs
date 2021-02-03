@@ -5,7 +5,7 @@ mod source;
 
 use std::{cell::RefCell, fs::File, panic, sync::Arc, time::Duration};
 
-use log::{debug, error, info, LevelFilter};
+use log::{debug, error, info, trace, LevelFilter};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -85,7 +85,6 @@ impl Completor {
         //     return Ok(());
         // }
 
-        info!("completing");
         let nvim = shared_nvim.read().await;
 
         let (sender, mut receiver) = channel(CHANNEL_SIZE);
@@ -124,12 +123,11 @@ impl Completor {
 
         let mut entries = Vec::new();
         while let Some(entry) = receiver.recv().await {
-            info!("Got entry: {:?}", entry);
             entries.push(entry);
         }
         entries.sort_unstable_by(|e1, e2| e1.score.cmp(&e2.score));
 
-        info!("Completing with these entries: {:?}", entries);
+        debug!("Completing with these entries: {:?}", entries);
         let entries = Entry::serialize(entries);
         nvim.call_function(
             "complete",
@@ -184,7 +182,7 @@ impl Handler for NeovimHandler {
         neovim: Neovim<Self::Writer>,
     ) {
         let nvim = SharedNvim::new(neovim);
-        debug!("Notification: {}, {:?}", name, args);
+        trace!("Notification: {}, {:?}", name, args);
 
         match name.as_ref() {
             "complete" => {
@@ -213,12 +211,12 @@ impl Handler for NeovimHandler {
 
 #[tokio::main]
 async fn main() {
-    // WriteLogger::init(
-    //     LevelFilter::Debug,
-    //     simplelog::Config::default(),
-    //     File::create("/home/brian/rofl.log").expect("Failed to create file"),
-    // )
-    // .expect("Failed to start logger");
+    WriteLogger::init(
+        LevelFilter::Debug,
+        simplelog::Config::default(),
+        File::create("/home/brian/rofl.log").expect("Failed to create file"),
+    )
+    .expect("Failed to start logger");
 
     // we do not want to crash when panicking, instead log it
     panic::set_hook(Box::new(move |panic| {
@@ -235,6 +233,7 @@ async fn main() {
 
     let (nvim, io_handler) = create::new_parent(NeovimHandler {
         completor: Arc::new(Mutex::new(completor)),
+        completor: Arc::new(Mut)
     })
     .await;
     info!("Connected to parent...");
@@ -242,7 +241,7 @@ async fn main() {
     // TODO: Any error should probably be logged, as stderr is not visible to users.
     match io_handler.await {
         Ok(res) => {
-            info!("OK Result: {:?}", res);
+            trace!("OK Result: {:?}", res);
         }
         Err(err) => {
             nvim.err_writeln(&format!("Error: '{}'", err))
