@@ -71,10 +71,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "directories-next"
+name = "dirs-next"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "339ee130d97a610ea5a5872d2bbb130fdf68884ff09d3028b81bec8a1ac23bbc"
+checksum = "b98cf8ebf19c3d1b223e151f99a4f9f0690dca41414773390fc824184ac833e1"
 dependencies = [
  "cfg-if 1.0.0",
  "dirs-sys-next",
@@ -519,7 +519,7 @@ name = "rofl_nvim"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "directories-next",
+ "dirs-next",
  "futures 0.3.12",
  "log",
  "nvim-rs",

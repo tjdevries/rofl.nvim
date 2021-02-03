@@ -1,9 +1,12 @@
 // Erik recommends: https://tracing.rs/tracing/
 use async_trait::async_trait;
 use log::{error, info, LevelFilter};
-use nvim_rs::{compat::tokio::Compat, create::tokio as create, Handler, Neovim, Value};
+use nvim_rs::{
+    call_args, compat::tokio::Compat, create::tokio as create, rpc::model::IntoVal, Handler,
+    Neovim, Value,
+};
 use simplelog::WriteLogger;
-use std::{collections::HashMap, fs::File, panic, path::Path, sync::Arc};
+use std::{collections::HashMap, panic, sync::Arc};
 use tokio::{io::Stdout, runtime, sync::RwLock};
 
 mod nvim;
@@ -68,11 +71,22 @@ impl Handler for NeovimHandler {
 }
 
 async fn run() {
+    let (nvim, io_handler) = create::new_parent(NeovimHandler {
+        iskeyword_map: Arc::new(RwLock::new(HashMap::new())),
+    })
+    .await;
+
+    let cache_path = dirs_next::cache_dir()
+        .expect("Failed to get cache dir")
+        .join("nvim");
+
+    // should be okay to be synchronous
+    std::fs::create_dir_all(&cache_path).expect("Failed to create cache dir");
+
     WriteLogger::init(
         LevelFilter::Debug,
         simplelog::Config::default(),
-        File::create(Path::new("/home/tj/.cache/nvim").join("rofl.log"))
-            .expect("Failed to create log file"),
+        std::fs::File::create(cache_path.join("rofl.log")).expect("Failed to create log file"),
     )
     .expect("Failed to start logger");
 
@@ -81,20 +95,6 @@ async fn run() {
         error!("----- Panic -----");
         error!("{}", panic);
     }));
-
-    let (nvim, io_handler) = create::new_parent(NeovimHandler {
-        iskeyword_map: Arc::new(RwLock::new(HashMap::new())),
-    })
-    .await;
-
-    // let cache_path = nvim.call_function("stdpath", vec![Value::from("cache")]);
-    // let cache_path = nvim
-    //     .call_function("stdpath", call_args!(String::from("cache")))
-    //     .await
-    //     .expect("Cache path to work")
-    //     .to_string();
-
-    info!("Connected to parent...");
 
     // TODO: Any error should probably be logged, as stderr is not visible to users.
     match io_handler.await {
