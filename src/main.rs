@@ -1,4 +1,4 @@
-// Erik recommends: https://tracing.rs/tracing/
+mod nvim;
 mod entry;
 mod score;
 mod source;
@@ -25,6 +25,8 @@ use tokio::{
 pub use entry::Entry;
 pub use score::Score;
 pub use source::{SharedSource, Source};
+
+type SharedNvim = Arc<Neovim<Compat<Stdout>>>;
 
 const CHANNEL_SIZE: usize = 500;
 
@@ -80,12 +82,10 @@ impl Completor {
         now.duration_since(earlier) < duration
     }
 
-    async fn complete(&mut self, shared_nvim: SharedNvim) -> Result<()> {
+    async fn complete(&mut self, nvim: SharedNvim) -> Result<()> {
         // if self.quicker_than(Duration::from_millis(50)) {
         //     return Ok(());
         // }
-
-        let nvim = shared_nvim.read().await;
 
         let (sender, mut receiver) = channel(CHANNEL_SIZE);
 
@@ -100,7 +100,7 @@ impl Completor {
 
         let user_match = self.user_match.read().await;
         for source in &self.sources {
-            let shared_nvim = shared_nvim.clone();
+            let nvim = nvim.clone();
             let source = source.clone();
             let sender = sender.clone();
             let user_match = user_match.clone();
@@ -108,7 +108,7 @@ impl Completor {
                 source
                     .lock()
                     .await
-                    .get(shared_nvim, sender, &user_match.clone())
+                    .get(nvim, sender, &user_match.clone())
                     .await
             });
             futs.push(handle);
@@ -145,19 +145,6 @@ impl Completor {
 #[derive(Debug, Clone)]
 struct NeovimHandler {
     completor: Arc<Mutex<Completor>>,
-}
-
-#[derive(Clone)]
-pub struct SharedNvim(Arc<RwLock<Neovim<Compat<Stdout>>>>);
-
-impl SharedNvim {
-    fn new(neovim: Neovim<Compat<Stdout>>) -> SharedNvim {
-        SharedNvim(Arc::new(RwLock::new(neovim)))
-    }
-
-    async fn read(&self) -> RwLockReadGuard<'_, Neovim<Compat<Stdout>>> {
-        self.0.read().await
-    }
 }
 
 #[async_trait]
