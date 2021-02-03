@@ -1,4 +1,5 @@
 use super::Score;
+use futures::stream::{self, StreamExt};
 use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 use nvim_rs::Value;
 
@@ -13,8 +14,8 @@ impl Entry {
         Entry { contents, score }
     }
 
-    pub fn serialize(entries: Vec<Entry>) -> Value {
-        Value::Array(entries.into_iter().map(|e| e.into()).collect())
+    pub async fn serialize(entries: Vec<Entry>) -> Value {
+        Value::Array(stream::iter(entries).map(|e| e.into()).collect().await)
     }
 
     pub fn score(self, text: &str) -> Option<Entry> {

@@ -121,7 +121,7 @@ impl Completor {
 
         entries.sort_unstable_by(|e1, e2| e1.score.cmp(&e2.score));
 
-        let entries = Entry::serialize(entries);
+        let entries = Entry::serialize(entries).await;
 
         nvim.call_function(
             "complete",
