@@ -1,70 +1,54 @@
 // Erik recommends: https://tracing.rs/tracing/
-
-use async_std::{self, io::Stdout};
-use log::{info, LevelFilter};
-
 use async_trait::async_trait;
-use nvim_rs::{create::async_std as create, Handler, Neovim, Value};
+use log::{error, info, LevelFilter};
+use nvim_rs::{compat::tokio::Compat, create::tokio as create, Handler, Neovim, Value};
+use simplelog::WriteLogger;
+use std::{fs::File, panic};
+use tokio::{io::Stdout, runtime};
 
-#[derive(Clone)]
-// struct NeovimHandler(Arc<Mutex<Posis>>);
+#[derive(Debug, Clone)]
 struct NeovimHandler {}
 
 #[async_trait]
 impl Handler for NeovimHandler {
-    type Writer = Stdout;
+    type Writer = Compat<Stdout>;
 
     async fn handle_request(
         &self,
         name: String,
         args: Vec<Value>,
-        neovim: Neovim<Self::Writer>,
+        neovim: Neovim<Compat<Stdout>>,
     ) -> Result<Value, Value> {
         info!("Request: {}, {:?}", name, args);
 
-        match name.as_ref() {
-            "first" => {
-                info!("Succesfully handled first");
-                Ok(Value::from("FIRST"))
-            }
-            "complete" => {
-                let buf = neovim
-                    .get_current_buf()
-                    .await
-                    .expect("Always has one buffer");
-
-                let lines = buf
-                    .get_lines(0, -1, false)
-                    .await
-                    .expect("Always gets da line");
-
-                Ok(Value::from(lines[0].as_str()))
-            }
-            "_test" => Ok(Value::from(true)),
-            _ => Err(nvim_rs::Value::from("Not implemented")),
-        }
+        Ok(Value::from(true))
     }
 
-    async fn handle_notify(&self, name: String, args: Vec<Value>, _neovim: Neovim<Self::Writer>) {
-        info!("Notification: {}, {:?}", name, args);
-
+    async fn handle_notify(&self, name: String, args: Vec<Value>, neovim: Neovim<Self::Writer>) {
         match name.as_ref() {
-            "PogChamp" => {
-                info!("You, we got dat PogChamp");
-            }
+            "complete" => {}
+            "v_char" => {}
+            "insert_leave" => {}
             _ => (),
         }
     }
 }
 
-#[async_std::main]
-async fn main() {
-    simple_logging::log_to_file("test.log", LevelFilter::Info).expect("Could not use log file");
+async fn run() {
+    WriteLogger::init(
+        LevelFilter::Debug,
+        simplelog::Config::default(),
+        File::create("/home/brian/rofl.log").expect("Failed to create file"),
+    )
+    .expect("Failed to start logger");
 
-    info!("Starting running the things");
-    let handler: NeovimHandler = NeovimHandler {};
+    // we do not want to crash when panicking, instead log it
+    panic::set_hook(Box::new(move |panic| {
+        error!("----- Panic -----");
+        error!("{}", panic);
+    }));
 
-    let (nvim, io_handler) = create::new_parent(handler).await;
+    let (nvim, io_handler) = create::new_parent(NeovimHandler {}).await;
     info!("Connected to parent...");
 
     // TODO: Any error should probably be logged, as stderr is not visible to users.
@@ -84,4 +68,12 @@ async fn main() {
                 });
         }
     }
+}
+
+fn main() {
+    let mut runtime = runtime::Builder::new()
+        .threaded_scheduler()
+        .build()
+        .expect("Failed to build runtime");
+    runtime.block_on(run())
 }
