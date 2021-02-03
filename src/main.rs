@@ -3,14 +3,14 @@ mod nvim;
 mod score;
 mod source;
 
-use std::{cell::RefCell, fs::File, panic, sync::Arc, time::Duration};
+use std::{panic, sync::Arc, time::Duration};
 
 use log::{debug, error, info, trace, LevelFilter};
 
 use anyhow::Result;
 use async_trait::async_trait;
-use futures::future::join_all;
-use futures_util::stream;
+use futures::future::AbortHandle;
+use futures::{future::abortable, future::join_all};
 use nvim_rs::{
     call_args, compat::tokio::Compat, create::tokio as create, rpc::model::IntoVal, Handler,
     Neovim, Value,
@@ -19,7 +19,8 @@ use simplelog::WriteLogger;
 use tokio::{
     io::Stdout,
     runtime,
-    sync::{mpsc::channel, Mutex, RwLock, RwLockReadGuard},
+    sync::{Mutex, RwLock},
+    task,
     time::Instant,
 };
 
@@ -29,14 +30,13 @@ pub use source::{SharedSource, Source};
 
 type SharedNvim = Arc<Neovim<Compat<Stdout>>>;
 
-const CHANNEL_SIZE: usize = 500;
-
 #[derive(Debug, Clone)]
 struct Completor {
     v_char: Option<char>,
     user_match: Arc<RwLock<String>>,
     sources: Vec<SharedSource>,
     instant: Instant,
+    complete_fut: Option<AbortHandle>,
 }
 
 impl Completor {
@@ -46,6 +46,7 @@ impl Completor {
             user_match: Arc::new(RwLock::new(String::new())),
             sources: Vec::new(),
             instant: Instant::now(),
+            complete_fut: None,
         }
     }
 
@@ -88,8 +89,6 @@ impl Completor {
         //     return Ok(());
         // }
 
-        let (sender, mut receiver) = channel(CHANNEL_SIZE);
-
         // let mode = nvim.get_mode().await?.swap_remove(0).1;
         // let mode = mode.as_str().unwrap();
         // debug!("mode: {:?}", mode);
@@ -99,37 +98,31 @@ impl Completor {
 
         let mut futs = Vec::with_capacity(self.sources.len());
 
-        let user_match = self.user_match.read().await;
         for source in &self.sources {
             let nvim = nvim.clone();
             let source = source.clone();
-            let sender = sender.clone();
-            let user_match = user_match.clone();
-            let handle = tokio::spawn(async move {
-                source
-                    .lock()
-                    .await
-                    .get(nvim, sender, &user_match.clone())
-                    .await
+            let user_match = self.user_match.clone();
+
+            let handle = task::spawn(async move {
+                let mut source = source.lock().await;
+                source.get(nvim, &user_match.read().await).await
             });
             futs.push(handle);
         }
-        drop(sender); // all the sources have their senders, we don't need it anymore
 
-        join_all(futs)
+        let user_match = self.user_match.read().await;
+        let mut entries: Vec<Entry> = join_all(futs)
             .await
             .into_iter()
-            .map(|j| j.unwrap())
-            .for_each(|_| ());
+            .map(|res| res.expect("Failed to join"))
+            .flatten()
+            .filter_map(|e| e.score(&user_match))
+            .collect();
 
-        let mut entries = Vec::new();
-        while let Some(entry) = receiver.recv().await {
-            entries.push(entry);
-        }
         entries.sort_unstable_by(|e1, e2| e1.score.cmp(&e2.score));
 
-        debug!("Completing with these entries: {:?}", entries);
         let entries = Entry::serialize(entries);
+
         nvim.call_function(
             "complete",
             call_args!(nvim.call_function("col", call_args!(".")).await?, entries),
@@ -174,34 +167,59 @@ impl Handler for NeovimHandler {
 
         match name.as_ref() {
             "complete" => {
-                self.completor
-                    .lock()
-                    .await
-                    .complete(nvim)
-                    .await
-                    .expect("Failed to complete");
+                if let Some(previous_complete) = self.completor.lock().await.complete_fut.take() {
+                    previous_complete.abort();
+                }
+
+                let completor = self.completor();
+                let fut = task::spawn(async move {
+                    let mut completor = completor.lock().await;
+                    completor.complete(nvim).await.expect("Failed to complete");
+                });
+
+                let (_fut, handle) = abortable(fut);
+                self.completor.lock().await.complete_fut.replace(handle);
             }
             "v_char" => {
-                let mut completor = self.completor.lock().await;
-                completor.set_v_char(args.remove(0));
-                drop(args);
-                completor.update_user_match().await;
+                let completor = self.completor();
+                task::spawn(async move {
+                    let mut completor_handle = completor.lock().await;
+                    completor_handle.set_v_char(args.remove(0));
+                    drop(args);
+                    completor_handle.update_user_match().await;
+                });
             }
             "insert_leave" => {
-                let completor = self.completor.lock().await;
-                info!("Clearing user match");
-                completor.user_match.write().await.clear();
+                let completor = self.completor();
+                task::spawn(async move {
+                    let completor = completor.lock().await;
+                    info!("Clearing user match");
+                    completor.user_match.write().await.clear();
+                });
             }
             _ => (),
         }
     }
 }
 
+impl NeovimHandler {
+    fn completor(&self) -> Arc<Mutex<Completor>> {
+        self.completor.clone()
+    }
+}
+
 async fn run() {
+    let cache_path = dirs_next::cache_dir()
+        .expect("Failed to get cache dir")
+        .join("nvim");
+
+    // should be okay to be synchronous
+    std::fs::create_dir_all(&cache_path).expect("Failed to create cache dir");
+
     WriteLogger::init(
         LevelFilter::Debug,
         simplelog::Config::default(),
-        File::create("/home/brian/rofl.log").expect("Failed to create file"),
+        std::fs::File::create(cache_path.join("rofl.log")).expect("Failed to create log file"),
     )
     .expect("Failed to start logger");
 

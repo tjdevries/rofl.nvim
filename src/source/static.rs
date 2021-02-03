@@ -1,8 +1,6 @@
-use async_trait::async_trait;
-use tokio::sync::mpsc::Sender;
-
 use super::{Score, SharedNvim, Source};
 use crate::Entry;
+use async_trait::async_trait;
 
 #[derive(Debug, Clone)]
 pub struct Static(Vec<Entry>);
@@ -20,10 +18,7 @@ impl Static {
 
 #[async_trait]
 impl Source for Static {
-    async fn get(&mut self, _nvim: SharedNvim, mut sender: Sender<Entry>, user_match: &str) {
-        let entries = self.0.clone();
-        for entry in Entry::score_multiple(entries, user_match) {
-            sender.send(entry.clone()).await.unwrap();
-        }
+    async fn get(&mut self, _nvim: SharedNvim, _: &str) -> Vec<Entry> {
+        self.0.clone()
     }
 }
