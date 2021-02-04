@@ -42,7 +42,7 @@ impl KeywordMatcher {
             }
         }
 
-        return LineRange { start, finish };
+        LineRange { start, finish }
     }
 }
 
