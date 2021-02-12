@@ -3,13 +3,67 @@ use async_trait::async_trait;
 use log::{error, info, LevelFilter};
 use nvim_rs::{compat::tokio::Compat, create::tokio as create, Handler, Neovim, Value};
 use simplelog::WriteLogger;
-use std::{collections::HashMap, panic, sync::Arc};
+use sources::{CompletionSource, FileCompletionSource};
+use std::{
+    collections::HashMap,
+    panic,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tokio::{io::Stdout, runtime, sync::RwLock};
 
 mod collections;
 mod nvim;
+mod sources;
 
 use nvim::iskeyword;
+
+#[derive(Debug)]
+pub struct CompletionContext {
+    /// The word under the cursor
+    word: String,
+
+    /// Current working directory for Neovim
+    cwd: PathBuf,
+}
+
+fn lookup_str_key(map: &Vec<(Value, Value)>, lookup_key: &str) -> String {
+    map.iter()
+        .find(|(key, _)| key.as_str().expect("string keys") == lookup_key)
+        .expect("TJ is dumb and twitch chat is smart")
+        .1
+        .as_str()
+        .expect("Did I send things gud")
+        .to_owned()
+}
+
+impl From<Vec<(Value, Value)>> for CompletionContext {
+    fn from(map: Vec<(Value, Value)>) -> Self {
+        // I've got a vector of value value, which is key:value pairs
+        // I know the names of the values I want
+        // ....
+        //
+        // local ctx = {}
+        // for k, v in pairs(request) do ctx[k] = v end
+        // return ctx
+        //
+        //
+        // local word = nil
+        // for k, v in pairs(request) do if k == "word" then word = v end end
+
+        // let map: HashMap<Value, Value> = map.into_iter().collect();
+        // let word: String = map
+        //     .iter()
+        //     .filter(|(key, value)| key.as_str().expect("All string keys") == "word")
+        //     .collect()[0]
+        //     .1;
+
+        let word = lookup_str_key(&map, "word");
+        let cwd: PathBuf = Path::new(lookup_str_key(&map, "cwd").as_str()).into();
+
+        CompletionContext { word, cwd }
+    }
+}
 
 #[derive(Debug, Clone)]
 struct NeovimHandler {
@@ -68,6 +122,51 @@ impl Handler for NeovimHandler {
             "complete" => {
                 info!("Completing...");
                 Ok(Value::Array(vec![Value::from("hello")]))
+            }
+            "complete_sync" => {
+                // TODO: Read about:
+                // - try_unpack
+                // - move vs clone
+                // - Results
+                // - Option vs Result
+                //
+                // - Other:
+                //  - iterators
+                //  - iter() vs into_iter() vs iter_mut()
+                //  - collect()
+                //
+                //  - https://upsuper.github.io/rust-cheatsheet/?dark
+                //
+                //  - interior mutability
+                //  - RefCel
+                //
+                // let map_context = args[0].as_map().expect("map_context").clone();
+                // let map_context: Vec<(Value, Value)> = args[0].try_unpack().expect("map_context");
+                // let map_context = args[0].as_map().iter.map(|(key, value)| ...);
+                let map_context = args[0].as_map().expect("map_context").clone();
+                let context = CompletionContext::from(map_context);
+                info!("context: {:?}", context);
+
+                // TODO: Decide on mutability
+                let file_completion = FileCompletionSource {};
+                let completions = file_completion.complete(&context);
+
+                Ok(Value::Array(match completions {
+                    Ok(completions) => completions
+                        .items
+                        .iter()
+                        .map(|x| Value::from(&x.word[..]))
+                        .collect(),
+                    Err(_) => vec![],
+                }))
+
+                // let neovim_stuff: Vec<Value> = completions
+                //     .items
+                //     .iter()
+                //     .map(|x| Value::from(&x.word[..]))
+                //     .collect();
+
+                // Ok(Value::Array(neovim_stuff))
             }
             "buf_initialize" => {
                 return buf_initialize(self, args).await;

@@ -88,4 +88,13 @@ rofl.notify = function(method, ...)
   vim.rpcnotify(rofl.job_id, method, ...)
 end
 
+rofl._get_completions = function(req)
+  return rofl.request(
+    'complete_sync',
+
+    req.context or rofl._get_context(),
+    req.sources or rofl._get_sources()
+  )
+end
+
 return rofl
