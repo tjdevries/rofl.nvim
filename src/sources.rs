@@ -73,8 +73,14 @@ impl CompletionSource for FileCompletionSource {
         // "/hello/world" -> "/hello"
         // "README.m" -> $CWD
         let path_tail = path_to_complete.file_name();
-        let path_parent = path_to_complete.parent().unwrap_or(&ctx.cwd);
-        info!("Path Parent: {:?}", path_parent);
+        let mut path_parent = path_to_complete.parent().unwrap_or(&ctx.cwd);
+        if path_parent == Path::new("") {
+            path_parent = &ctx.cwd;
+        }
+        info!(
+            "To Complete: {:?}, Path Parent: {:?}",
+            path_to_complete, path_parent
+        );
 
         // TODO: Use tokio's FS stuff so that I'm async :)
         // let mut results: Vec<CompletionItem> = Vec::new()
@@ -92,6 +98,7 @@ impl CompletionSource for FileCompletionSource {
                 .filter_map(|entry| {
                     entry.map_or(None, |x| {
                         let path = x.path();
+                        info!("Examining Path: {:?}", path);
 
                         if let Some(path_filter) = path_tail {
                             if let Some(tail) = path.file_name() {
@@ -104,8 +111,9 @@ impl CompletionSource for FileCompletionSource {
                             }
                         }
 
+                        let relative_path = pathdiff::diff_paths(&path, path_parent)?;
                         Some(CompletionItem {
-                            word: String::from(path.to_str().expect("Can make a str")),
+                            word: String::from(relative_path.to_str().expect("Can make a str")),
                         })
                     })
                 })

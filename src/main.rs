@@ -51,13 +51,6 @@ impl From<Vec<(Value, Value)>> for CompletionContext {
         // local word = nil
         // for k, v in pairs(request) do if k == "word" then word = v end end
 
-        // let map: HashMap<Value, Value> = map.into_iter().collect();
-        // let word: String = map
-        //     .iter()
-        //     .filter(|(key, value)| key.as_str().expect("All string keys") == "word")
-        //     .collect()[0]
-        //     .1;
-
         let word = lookup_str_key(&map, "word");
         let cwd: PathBuf = Path::new(lookup_str_key(&map, "cwd").as_str()).into();
 

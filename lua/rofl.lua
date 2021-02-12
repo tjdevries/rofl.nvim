@@ -81,7 +81,6 @@ rofl.complete_func = function(find_start, base)
   end
 end
 
-vim.bo.completefunc = 'RoflComplete'
 
 rofl.notify = function(method, ...)
   rofl.start()
@@ -96,5 +95,7 @@ rofl._get_completions = function(req)
     req.sources or rofl._get_sources()
   )
 end
+
+-- vim.bo.completefunc = 'RoflComplete'
 
 return rofl
