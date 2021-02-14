@@ -3,12 +3,12 @@ use async_trait::async_trait;
 use log::{error, info, LevelFilter};
 use nvim_rs::{compat::tokio::Compat, create::tokio as create, Handler, Neovim, Value};
 use simplelog::WriteLogger;
-use sources::{CompletionSource, FileCompletionSource};
+use sources::{BufferCompletionSource, CompletionSource, FileCompletionSource};
 use std::{
     collections::HashMap,
     panic,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 use tokio::{io::Stdout, runtime, sync::RwLock};
 
@@ -61,6 +61,9 @@ impl From<Vec<(Value, Value)>> for CompletionContext {
 #[derive(Debug, Clone)]
 struct NeovimHandler {
     iskeyword_map: Arc<RwLock<HashMap<u64, iskeyword::KeywordMatcher>>>,
+
+    file_completion: FileCompletionSource,
+    buffer_completion: Arc<Mutex<BufferCompletionSource>>,
 }
 
 async fn buf_initialize(handler: &NeovimHandler, args: Vec<Value>) -> Result<Value, Value> {
@@ -141,8 +144,7 @@ impl Handler for NeovimHandler {
                 info!("context: {:?}", context);
 
                 // TODO: Decide on mutability
-                let file_completion = FileCompletionSource {};
-                let completions = file_completion.complete(&context);
+                let completions = self.file_completion.complete(&context);
 
                 Ok(Value::Array(match completions {
                     Ok(completions) => completions
@@ -176,6 +178,25 @@ impl Handler for NeovimHandler {
             "buf_initialize" => {
                 let _ = buf_initialize(self, args).await;
             }
+            "buf_attach_lines" => {
+                // Call all the `on_attach` methods for existing sources.
+                let bufnr = args[0].as_u64().expect("bufnr");
+                let start_line = args[1].as_u64().expect("start_line");
+                let final_line = args[2].as_u64().expect("final_line");
+                let resulting_lines: Vec<String> = args[3]
+                    .as_array()
+                    .expect("resulting_lines")
+                    .iter()
+                    .map(|val| val.as_str().expect("Sent strings").to_string())
+                    .collect();
+
+                self.buffer_completion.lock().expect("locked").on_lines(
+                    bufnr,
+                    start_line,
+                    final_line,
+                    &resulting_lines,
+                );
+            }
             _ => (),
         }
     }
@@ -184,6 +205,15 @@ impl Handler for NeovimHandler {
 async fn run() {
     let (nvim, io_handler) = create::new_parent(NeovimHandler {
         iskeyword_map: Arc::new(RwLock::new(HashMap::new())),
+
+        // TODO: We should actually make it so that we have some hashmap of
+        // completion source names -> completion sources.
+        //
+        // This way we can just register and add them as we go
+        //
+        // Then you can only request from sources, etc.
+        file_completion: FileCompletionSource {},
+        buffer_completion: Arc::new(Mutex::new(BufferCompletionSource {})),
     })
     .await;
 

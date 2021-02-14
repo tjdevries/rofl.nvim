@@ -34,16 +34,27 @@ rofl.start = function(bufnr)
 end
 
 rofl.attach = function(bufnr)
-  bufnr = bufnr or 0
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
 
-  vim.cmd [[autocmd! InsertCharPre <buffer> lua require'rofl'.notify("v_char", vim.api.nvim_get_vvar("char"))]]
-
-  vim.cmd [[autocmd! InsertLeave <buffer> lua require'rofl'.notify("insert_leave")]]
+  -- vim.cmd [[autocmd! InsertCharPre <buffer> lua require'rofl'.notify("v_char", vim.api.nvim_get_vvar("char"))]]
+  -- vim.cmd [[autocmd! InsertLeave <buffer> lua require'rofl'.notify("insert_leave")]]
 
   api.nvim_buf_attach(bufnr, true, {
-    on_lines = function()
+    on_lines = function(_, _, _, line_start, line_end, new_end)
       -- local mode =  api.nvim_get_mode()["mode"]
-      rofl.notify("complete")
+      -- rofl.notify("complete")
+      rofl.notify(
+        "buf_attach_lines",
+
+        bufnr,
+
+        -- Range of start, finish
+        line_start,
+        line_end,
+
+        -- New text in the lines
+        vim.api.nvim_buf_get_lines(bufnr, line_start, new_end, false)
+      )
     end,
   })
 end
