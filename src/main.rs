@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
-use tokio::{io::Stdout, runtime, sync::RwLock};
+use tokio::{runtime, sync::RwLock};
 
 mod collections;
 mod nvim;
@@ -28,6 +28,9 @@ pub struct CompletionContext {
 
     /// Current buffer
     bufnr: u64,
+    // Enabled sources
+    // sources: HashMap<SourceType, CompletionSource>,
+    // sources: Vec<CompletionSource>,
 }
 
 fn lookup_str_key(map: &Vec<(Value, Value)>, lookup_key: &str) -> String {
@@ -69,6 +72,38 @@ impl From<Vec<(Value, Value)>> for CompletionContext {
         let bufnr = lookup_u64_key(&map, "bufnr");
 
         CompletionContext { word, cwd, bufnr }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SourceContext {
+    /// Is file source enabled?
+    file: bool,
+
+    /// Is buffer source enabled?
+    buffer: bool,
+}
+
+impl From<Vec<(Value, Value)>> for SourceContext {
+    fn from(map: Vec<(Value, Value)>) -> Self {
+        let coerce_bool = |index| match index {
+            Value::Boolean(val) => val.clone(),
+            Value::Nil => false,
+            _ => false,
+        };
+
+        let mut file = false;
+        let mut buffer = false;
+        for (key, index) in map.iter() {
+            let key = key.as_str().expect("keys are strings");
+            if key == "file" {
+                file = coerce_bool(index.clone());
+            } else if key == "buffer" {
+                buffer = coerce_bool(index.clone());
+            }
+        }
+
+        SourceContext { file, buffer }
     }
 }
 
@@ -155,29 +190,35 @@ impl Handler for NeovimHandler {
                 // let map_context = args[0].as_map().expect("map_context").clone();
                 // let map_context: Vec<(Value, Value)> = args[0].try_unpack().expect("map_context");
                 // let map_context = args[0].as_map().iter.map(|(key, value)| ...);
-                let map_context = args[0].as_map().expect("map_context").clone();
-                let context = CompletionContext::from(map_context);
-                info!("context: {:?}", context);
+                let map_context_value = args[0].as_map().expect("map_context").clone();
+                let map_context = CompletionContext::from(map_context_value);
+                info!("context: {:?}", map_context);
 
-                // TODO: Decide on mutability
-                let completions_file = self.file_completion.complete(&context);
-                let completions_buffer = self
-                    .buffer_completion
-                    .lock()
-                    .expect("gets the lock")
-                    .complete(&context);
-
-                // info!("buffer_completion {:?}", self.buffer_completion.lock());
+                let source_context_value = args[1].as_map().unwrap_or(&Vec::new()).clone();
+                let source_context = SourceContext::from(source_context_value);
 
                 let mut completions: Completions = Completions { items: Vec::new() };
-                if let Ok(c) = completions_file {
-                    info!("Adding file completions");
-                    completions.items.extend(c.items)
+
+                // TODO: Decide on mutability
+                if source_context.file {
+                    let completions_file = self.file_completion.complete(&map_context);
+                    if let Ok(c) = completions_file {
+                        info!("Adding file completions");
+                        completions.items.extend(c.items)
+                    }
                 }
 
-                if let Ok(c) = completions_buffer {
-                    info!("Adding buffer completions");
-                    completions.items.extend(c.items)
+                if source_context.buffer {
+                    let completions_buffer = self
+                        .buffer_completion
+                        .lock()
+                        .expect("gets the lock")
+                        .complete(&map_context);
+
+                    if let Ok(c) = completions_buffer {
+                        info!("Adding buffer completions");
+                        completions.items.extend(c.items)
+                    }
                 }
 
                 let array = Value::Array(

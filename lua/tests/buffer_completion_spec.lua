@@ -2,15 +2,19 @@ local rofl = require('rofl')
 
 local eq = assert.are.same
 
-local get_buffer_completions = function(word, cwd)
+local get_context = function(word)
+  return {
+    word = word,
+    cwd = vim.loop.cwd(),
+    bufnr = vim.api.nvim_get_current_buf(),
+  }
+end
+
+local get_buffer_completions = function(word, disable_buffer)
   local res = rofl._get_completions {
-    context = {
-      word = word,
-      cwd = cwd or vim.loop.cwd(),
-      bufnr = vim.api.nvim_get_current_buf(),
-    },
+    context = get_context(word),
     sources = {
-      buffer = true,
+      buffer = not disable_buffer,
       file = true,
     }
   }
@@ -69,6 +73,8 @@ describe('rofl.nvim files', function()
     eq({}, get_buffer_completions("not_a_thing"))
     eq({}, get_buffer_completions("hel"))
     eq({"world"}, get_buffer_completions("w"))
+    eq({}, get_buffer_completions("w", true))
+    eq({"world"}, get_buffer_completions("w", false))
   end)
 
 end)
