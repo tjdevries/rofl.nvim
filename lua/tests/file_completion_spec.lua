@@ -33,6 +33,7 @@ describe('rofl.nvim files', function()
 
   it('returns one file when it matches', function()
     eq({'Cargo.lock', 'Cargo.toml'}, get_file_completions('./Car'))
+    eq({'Cargo.lock', 'Cargo.toml'}, get_file_completions('./Car'))
   end)
 
   it('returns files from different cwds', function()

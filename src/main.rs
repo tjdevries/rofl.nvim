@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use log::{error, info, LevelFilter};
 use nvim_rs::{compat::tokio::Compat, create::tokio as create, Handler, Neovim, Value};
 use simplelog::WriteLogger;
-use sources::{BufferCompletionSource, CompletionSource, FileCompletionSource};
+use sources::{BufferCompletionSource, CompletionSource, Completions, FileCompletionSource};
 use std::{
     collections::HashMap,
     panic,
@@ -25,6 +25,9 @@ pub struct CompletionContext {
 
     /// Current working directory for Neovim
     cwd: PathBuf,
+
+    /// Current buffer
+    bufnr: u64,
 }
 
 fn lookup_str_key(map: &Vec<(Value, Value)>, lookup_key: &str) -> String {
@@ -33,6 +36,16 @@ fn lookup_str_key(map: &Vec<(Value, Value)>, lookup_key: &str) -> String {
         .expect("TJ is dumb and twitch chat is smart")
         .1
         .as_str()
+        .expect("Did I send things gud")
+        .to_owned()
+}
+
+fn lookup_u64_key(map: &Vec<(Value, Value)>, lookup_key: &str) -> u64 {
+    map.iter()
+        .find(|(key, _)| key.as_str().expect("string keys") == lookup_key)
+        .expect("TJ is dumb and twitch chat is smart // u64 way")
+        .1
+        .as_u64()
         .expect("Did I send things gud")
         .to_owned()
 }
@@ -53,8 +66,9 @@ impl From<Vec<(Value, Value)>> for CompletionContext {
 
         let word = lookup_str_key(&map, "word");
         let cwd: PathBuf = Path::new(lookup_str_key(&map, "cwd").as_str()).into();
+        let bufnr = lookup_u64_key(&map, "bufnr");
 
-        CompletionContext { word, cwd }
+        CompletionContext { word, cwd, bufnr }
     }
 }
 
@@ -78,12 +92,12 @@ async fn buf_initialize(handler: &NeovimHandler, args: Vec<Value>) -> Result<Val
     iskeyword_map.insert(bufnr, iskeyword::transform(iskeyword_str));
     info!("new iskeyword {:?}", iskeyword_map);
 
-    return Ok(Value::from("hello"));
+    Ok(Value::Nil)
 }
 
 #[async_trait]
 impl Handler for NeovimHandler {
-    type Writer = Compat<Stdout>;
+    type Writer = Compat<tokio::io::Stdout>;
 
     async fn handle_request(
         &self,
@@ -91,10 +105,12 @@ impl Handler for NeovimHandler {
         args: Vec<Value>,
         _neovim: Neovim<Self::Writer>,
     ) -> Result<Value, Value> {
+        info!("===========================================================");
         info!("Request: {}, {:?}", name, args);
 
         match name.as_ref() {
             "find_start" => {
+                info!("======================= FIND START ==================================");
                 let current_bufnr = args[0].as_u64().expect("Bufnr");
                 let current_line = args[1].to_string();
                 let current_cursor = args[2].as_u64().expect("Should get a number");
@@ -116,7 +132,7 @@ impl Handler for NeovimHandler {
                 Ok(Value::from(line_range.start - 1))
             }
             "complete" => {
-                info!("Completing...");
+                info!("======================= COMPLETE ==================================");
                 Ok(Value::Array(vec![Value::from("hello")]))
             }
             "complete_sync" => {
@@ -144,24 +160,38 @@ impl Handler for NeovimHandler {
                 info!("context: {:?}", context);
 
                 // TODO: Decide on mutability
-                let completions = self.file_completion.complete(&context);
+                let completions_file = self.file_completion.complete(&context);
+                let completions_buffer = self
+                    .buffer_completion
+                    .lock()
+                    .expect("gets the lock")
+                    .complete(&context);
 
-                Ok(Value::Array(match completions {
-                    Ok(completions) => completions
+                // info!("buffer_completion {:?}", self.buffer_completion.lock());
+
+                let mut completions: Completions = Completions { items: Vec::new() };
+                if let Ok(c) = completions_file {
+                    info!("Adding file completions");
+                    completions.items.extend(c.items)
+                }
+
+                if let Ok(c) = completions_buffer {
+                    info!("Adding buffer completions");
+                    completions.items.extend(c.items)
+                }
+
+                let array = Value::Array(
+                    completions
                         .items
                         .iter()
-                        .map(|x| Value::from(&x.word[..]))
+                        .map(|x| Value::from(x.word.clone()))
                         .collect(),
-                    Err(_) => vec![],
-                }))
+                );
 
-                // let neovim_stuff: Vec<Value> = completions
-                //     .items
-                //     .iter()
-                //     .map(|x| Value::from(&x.word[..]))
-                //     .collect();
+                info!("{:?}", completions);
+                info!("Array: {:?}", &array);
 
-                // Ok(Value::Array(neovim_stuff))
+                Ok(array)
             }
             "buf_initialize" => {
                 return buf_initialize(self, args).await;
@@ -179,6 +209,8 @@ impl Handler for NeovimHandler {
                 let _ = buf_initialize(self, args).await;
             }
             "buf_attach_lines" => {
+                info!("Calling buf attach lines");
+
                 // Call all the `on_attach` methods for existing sources.
                 let bufnr = args[0].as_u64().expect("bufnr");
                 let start_line = args[1].as_u64().expect("start_line");
@@ -195,6 +227,11 @@ impl Handler for NeovimHandler {
                     start_line,
                     final_line,
                     &resulting_lines,
+                );
+
+                info!(
+                    "Completed buf attach lines {:?}",
+                    self.buffer_completion.lock().expect("locked")
                 );
             }
             _ => (),
@@ -213,7 +250,9 @@ async fn run() {
         //
         // Then you can only request from sources, etc.
         file_completion: FileCompletionSource {},
-        buffer_completion: Arc::new(Mutex::new(BufferCompletionSource {})),
+        buffer_completion: Arc::new(Mutex::new(BufferCompletionSource {
+            word_store: HashMap::new(),
+        })),
     })
     .await;
 
@@ -225,7 +264,7 @@ async fn run() {
     std::fs::create_dir_all(&cache_path).expect("Failed to create cache dir");
 
     WriteLogger::init(
-        LevelFilter::Trace,
+        LevelFilter::Debug,
         simplelog::Config::default(),
         std::fs::File::create(cache_path.join("rofl.log")).expect("Failed to create log file"),
     )

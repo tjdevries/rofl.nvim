@@ -1,6 +1,8 @@
 
 local rofl = require('rofl')
 
+rofl.attach(vim.api.nvim_get_current_buf())
+
 function DoTest()
   return rofl._get_completions {
     context = {
@@ -33,5 +35,6 @@ function CompleteFile()
 
   return ''
 end
+
 
 vim.cmd [[inoremap <c-x><c-f> <c-r>=luaeval('CompleteFile()')<CR>]]

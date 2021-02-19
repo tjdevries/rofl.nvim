@@ -1,16 +1,17 @@
 local rofl = require('rofl')
 
-
 local eq = assert.are.same
 
-local get_file_completions = function(word, cwd)
+local get_buffer_completions = function(word, cwd)
   local res = rofl._get_completions {
     context = {
       word = word,
       cwd = cwd or vim.loop.cwd(),
+      bufnr = vim.api.nvim_get_current_buf(),
     },
     sources = {
-      files = true
+      buffer = true,
+      file = true,
     }
   }
 
@@ -27,15 +28,19 @@ describe('rofl.nvim files', function()
     local bufnr = vim.api.nvim_create_buf(true, false)
     vim.api.nvim_set_current_buf(bufnr)
 
+    -- local bufnr = vim.api.nvim_get_current_buf()
     rofl.attach(bufnr)
   end)
 
-  it('returns empty list for bad files', function()
-    vim.api.nvim_buf_set_lines(0, 0, -1, false, {"hello", "world"})
-    eq({"hello", "world"}, vim.api.nvim_buf_get_lines(0, 0, -1, false))
+  it('returns nothing in an empty buffer', function()
+    eq({}, get_buffer_completions("not_a_prefix"))
+    eq({}, get_buffer_completions("not_a_prefix"))
+    eq({}, get_buffer_completions("not_a_prefix"))
+    eq({}, get_buffer_completions("not_a_prefix"))
+    eq({}, get_buffer_completions("not_a_prefix"))
   end)
 
-  it('can return only from current buffer', function()
+  it('returns things only from the current buffer', function()
     --[[
       hello world
 
@@ -50,4 +55,20 @@ describe('rofl.nvim files', function()
     --      <M-n> -> rofl.complete { buffers = { all } }
     --]]
   end)
+
+  it('returns valid candidates in a file', function()
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, {"hello", "world"})
+    eq({"hello", "world"}, vim.api.nvim_buf_get_lines(0, 0, -1, false))
+
+    eq({}, get_buffer_completions("not_a_thing"))
+    eq({"hello"}, get_buffer_completions("hel"))
+    eq({"world"}, get_buffer_completions("w"))
+
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, {"", "world"})
+
+    eq({}, get_buffer_completions("not_a_thing"))
+    eq({}, get_buffer_completions("hel"))
+    eq({"world"}, get_buffer_completions("w"))
+  end)
+
 end)

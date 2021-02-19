@@ -8,6 +8,7 @@ edition = "2018"
 
 [dependencies]
 nvim-rs = { version = "0.2", features = ["use_tokio"] }
+# nvim-rs = { git = "https://github.com/killTheMule/nvim-rs", features = ["use_tokio"] }
 tokio = { version = "0.2.8", features = ["full"] }
 async-trait = "0.1.22"
 log = "0.4.14"

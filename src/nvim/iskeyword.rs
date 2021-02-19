@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::str::FromStr;
 
-use log::info;
+use log::{info, trace};
 
 use crate::collections::LineRange;
 
@@ -95,7 +95,7 @@ impl FromStr for KeywordMatcher {
 
                     for i in start..finish + 1 {
                         let new_char = std::char::from_u32(i).expect("This has to be valid");
-                        info!("Found new_char: {}", new_char);
+                        trace!("Found new_char: {}", new_char);
                         character_set.insert(new_char);
                     }
                 }

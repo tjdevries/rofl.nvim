@@ -12,7 +12,7 @@ use std::{
 
 use crate::CompletionContext;
 use anyhow::Result;
-use log::info;
+use log::{info, trace};
 
 // CompletionSource: function(ctx) -> Completions
 //
@@ -105,7 +105,7 @@ impl CompletionSource for FileCompletionSource {
                 .filter_map(|entry| {
                     entry.map_or(None, |x| {
                         let path = x.path();
-                        info!("Examining Path: {:?}", path);
+                        trace!("Examining Path: {:?}", path);
 
                         if let Some(path_filter) = path_tail {
                             if let Some(tail) = path.file_name() {
@@ -147,7 +147,18 @@ impl CompletionSource for FileCompletionSource {
 #[derive(Debug, Clone)]
 pub struct BufferWordStore {
     lines_to_words: HashMap<u64, Vec<String>>,
+
+    // TODO: Later it would be cool to do this with a Trie
     words: HashMap<String, u64>,
+}
+
+impl Default for BufferWordStore {
+    fn default() -> Self {
+        Self {
+            lines_to_words: HashMap::new(),
+            words: HashMap::new(),
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -177,17 +188,19 @@ impl BufferWordStore {
             }
         }
 
+        // TODO: Seems like this should be one line in rust.
+        // Probably twice as many characters and 30 more functions, but could be one line.
         for word in &words {
             self.words.entry(word.clone()).or_insert(0);
             *self.words.get_mut(word).unwrap() += 1;
         }
+
+        self.lines_to_words.insert(line, words.clone());
     }
 
     pub fn get_exact_matches(&self, prefix: &str) -> HashSet<String> {
         let mut result = HashSet::new();
-        println!("Getting matches...");
         for (word, _) in &self.words {
-            println!("Word: {:?}", word);
             if word.starts_with(prefix) {
                 result.insert(word.to_owned());
             }
@@ -205,23 +218,42 @@ impl BufferWordStore {
 /// This is super overkill and that's OK :) I just wanna learn Rust.
 #[derive(Debug, Clone)]
 pub struct BufferCompletionSource {
-    // {
-//  bufnr: {
-//      lines_to_words: {
-//          1: {"hello", "world"},
-//      },
-//      words: Trie<str, count>
-//  }
-// buffer_words: HashMap<u64, HashSet<String>>,
+    pub word_store: HashMap<u64, BufferWordStore>,
 }
 
 impl CompletionSource for BufferCompletionSource {
-    fn complete(&self, _ctx: &CompletionContext) -> Result<Completions> {
-        Ok(Completions { items: Vec::new() })
+    fn complete(&self, ctx: &CompletionContext) -> Result<Completions> {
+        match self.word_store.get(&ctx.bufnr) {
+            None => Ok(Completions { items: Vec::new() }),
+            Some(buffer_word_store) => Ok(Completions {
+                // items: vec![CompletionItem {
+                //     word: String::from("hello"),
+                // }],
+                items: buffer_word_store
+                    .get_exact_matches(&ctx.word)
+                    .into_iter()
+                    .map(|x| CompletionItem { word: x })
+                    .collect(),
+            }),
+        }
     }
 
-    fn on_lines(&mut self, _bufnr: u64, _start_line: u64, _final_line: u64, _lines: &Vec<String>) {
-        info!("Callin on lines yo");
+    fn on_lines(&mut self, bufnr: u64, start_line: u64, _final_line: u64, lines: &Vec<String>) {
+        let buffer_word_store = self
+            .word_store
+            .entry(bufnr)
+            .or_insert(BufferWordStore::default());
+
+        for index in 0..lines.len() as u64 {
+            let line = start_line + index;
+            let text: Vec<String> = lines[index as usize]
+                .clone()
+                .split(" ")
+                .map(|x| x.to_string())
+                .collect();
+
+            buffer_word_store.update(line, text);
+        }
     }
 }
 
@@ -231,19 +263,28 @@ mod tests {
 
     #[test]
     fn test_buffer_updater() {
-        let mut buffer_store = BufferWordStore {
-            lines_to_words: HashMap::new(),
-            words: HashMap::new(),
-        };
+        let mut buffer_store = BufferWordStore::default();
 
         buffer_store.update(1, vec![String::from("hello"), String::from("world")]);
         buffer_store.update(2, vec![String::from("world")]);
-        dbg!(&buffer_store);
 
         assert_eq!(HashSet::new(), buffer_store.get_exact_matches("asdf"));
 
         let mut hello_match = HashSet::new();
         hello_match.insert(String::from("hello"));
         assert_eq!(hello_match, buffer_store.get_exact_matches("hel"));
+    }
+
+    #[test]
+    fn test_removing_line() {
+        let mut buffer_store = BufferWordStore::default();
+
+        buffer_store.update(1, vec![String::from("hello"), String::from("world")]);
+        buffer_store.update(2, vec![String::from("world")]);
+        buffer_store.update(1, vec![String::from("world")]);
+
+        dbg!(&buffer_store);
+
+        assert_eq!(HashSet::new(), buffer_store.get_exact_matches("hel"));
     }
 }
